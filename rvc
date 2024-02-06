@@ -1,0 +1,193 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'bundler/inline'
+
+gemfile do
+  source 'https://rubygems.org'
+  gem 'thor', '~>1.3.0'
+end
+
+require 'thor'
+require 'English'
+
+# helper module for interacting with git
+module Git
+  def log_command(cmd)
+    puts "> #{cmd}" if options.verbose
+  end
+
+  def run_command(cmd)
+    log_command cmd
+    out = IO.popen(cmd, &:readlines)
+    rc = $CHILD_STATUS.exitstatus
+    unless rc.zero?
+      puts out.join if options.verbose
+      raise "#{cmd} failed"
+    end
+
+    out
+  end
+
+  def parse_status_line(line)
+    short_code = line.slice(0, 2).strip
+    file = line.slice(3..).strip
+
+    [short_code, file]
+  end
+
+  def git_status
+    out = run_command('git status --porcelain')
+    parsed = out.map { |l| parse_status_line l }
+    stats = {}
+    parsed.each do |i|
+      key = i[0]
+      stats[key] = [] unless stats.key?(key)
+      stats[key] << i[1]
+    end
+    stats
+  end
+
+  # rubocop:disable Layout/MethodLength
+  def git_labels(short)
+    case short
+    when 'A'
+      'added'
+    when 'M'
+      'modified'
+    when 'D', 'DD'
+      'deleted'
+    when '??'
+      'untracked'
+    else
+      raise "Unknown status label: #{short}. Use git to investigate."
+    end
+  end
+  # rubocop:enable Layout/MethodLength
+
+  def git_add(path)
+    run_command("git add #{path}")
+  end
+
+  def git_commit(message)
+    run_command("git commit -a -m '#{message}'")
+  end
+
+  def git_init
+    run_command('git init')
+  end
+
+  def git_repo_exists?
+    File.directory?('.git')
+  end
+
+  def git_clean
+    run_command('git clean -f')
+  end
+
+  def git_revert
+    run_command('git checkout .')
+  end
+end
+
+# fix for Thor's missing global error handling
+module ErrorHandling
+  def start(given_args = ARGV, config = {})
+    super
+  rescue StandardError => e
+    handle_error(e, config)
+  end
+
+  def handle_error(err, config)
+    config[:shell]&.say_error(err.message.to_s, :red)
+    puts err.backtrace if verbose?(config)
+    exit(false)
+  end
+
+  def verbose?(config)
+    config[:shell].base.options.verbose
+  end
+end
+
+# main CLI application
+class App < Thor
+  include Git
+  extend ErrorHandling
+
+  def self.exit_on_failure?
+    true
+  end
+
+  VERSION = '1.0.0'
+
+  package_name "rvc #{VERSION}"
+
+  class_option :verbose,
+               type: :boolean,
+               aliases: 'v',
+               default: false,
+               desc: 'Provide detailed output'
+
+  desc 'status', 'display a summary of the current status'
+  def status
+    git_status.each_pair do |k, files|
+      puts git_labels(k).capitalize
+      files.each do |f|
+        puts "\t#{f}"
+      end
+    end
+  end
+
+  desc 'save', 'add a new revision'
+  method_option :all,
+                aliases: 'a',
+                type: :boolean,
+                default: false,
+                desc: 'Include new files in the new revision'
+  method_option :message,
+                aliases: 'm',
+                type: :string,
+                default: '[…]',
+                desc: 'Message to attach to the revision'
+  def save
+    git_add('.') if options.all
+    git_commit(options.message)
+  end
+
+  desc 'init', 'initialize a new repository and adds all files to the first revision'
+  method_option :message,
+                aliases: 'm',
+                type: :string,
+                default: '[…]',
+                desc: 'Message to attach to the first revision if one is created'
+  def init
+    raise 'This directory is already a Git repository' if git_repo_exists?
+
+    git_init
+    return if git_status.empty?
+
+    git_add('.')
+    git_commit(options.message)
+  end
+
+  desc 'clean', 'Deletes untracked files after confirmation'
+  def clean
+    status
+    raise 'Cancelled' unless yes?('This will delete all untracked files. Are you sure?')
+
+    git_clean
+  end
+
+  desc 'revert', 'Rolls back to the latest saved revision'
+  def revert
+    status
+    raise 'Cancelled' unless yes?('This will undo all changes to modified files. Are you sure?')
+
+    git_revert
+  end
+
+  map 'st' => 'status'
+  map 'sv' => 'save'
+end
+
+App.start(ARGV)
