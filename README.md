@@ -10,6 +10,8 @@ By default, it won't even add meaningful commit messages.
 
 ## Installation
 
+Requirements: Ruby and Bundler <https://bundler.io>
+
 1. Download the `rvc` script
 1. put it somewhere in your `$PATH`
 1. make it executable
