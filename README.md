@@ -1,3 +1,7 @@
+# MOVED!!
+
+This repository has moved: https://codeberg.org/selfawaresoup/rvc
+
 # RVC
 
 *(ReVision Control)*
